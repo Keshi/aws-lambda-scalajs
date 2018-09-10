@@ -1,8 +1,10 @@
 import java.io.FileInputStream
+import java.nio.ByteBuffer
 
-import com.amazonaws.regions.{Regions, Region}
-import com.amazonaws.services.lambda.{model, AWSLambdaClient}
-import com.amazonaws.services.lambda.model.{Mode, UploadFunctionRequest}
+import com.amazonaws.regions.{Region, Regions}
+import com.amazonaws.services.lambda.{AWSLambdaClient, model}
+import com.amazonaws.services.lambda.model._
+import com.amazonaws.util.IOUtils
 import com.github.tptodorov.sbt.cloudformation.CloudFormation
 import com.github.tptodorov.sbt.cloudformation.Import.Keys._
 import com.github.tptodorov.sbt.cloudformation.Import.Configurations._
@@ -46,17 +48,25 @@ def makeLambdaConfiguration(config: Configuration) = Seq(
     (n, zipFile, client, lambdaHandlers, execRole, s) =>
       lambdaHandlers.foreach {
         handler =>
+          val bytes = ByteBuffer.wrap(IOUtils.toByteArray(new FileInputStream(zipFile)))
+          val functionName = s"$n-$handler-$config"
 
-          val result = client.uploadFunction(new UploadFunctionRequest()
-            .withFunctionName(s"$n-$handler-$config")
-            .withHandler(s"index.$handler")
-            .withFunctionZip(new FileInputStream(zipFile))
-            .withMode(Mode.Event)
-            .withRuntime(model.Runtime.Nodejs)
-            .withRole(execRole))
-
-          s.log.info(s"uploaded $handler : $result")
-
+          try {
+            val funcResult = client.getFunction(new GetFunctionRequest().withFunctionName(functionName))
+            val result2 = client.updateFunctionCode(new UpdateFunctionCodeRequest()
+              .withFunctionName(functionName)
+              .withZipFile(bytes))
+            s.log.info(s"updated lambda function '$handler' : $result2")
+          } catch {
+            case e:ResourceNotFoundException =>
+              val result = client.createFunction(new CreateFunctionRequest()
+                .withFunctionName(functionName)
+                .withHandler(s"index.$handler")
+                .withCode(new FunctionCode().withZipFile(bytes))
+                .withRuntime(model.Runtime.Nodejs810)
+                .withRole(execRole))
+              s.log.info(s"created lambda function '$handler' : $result")
+          }
       }
   }
 
@@ -64,13 +74,13 @@ def makeLambdaConfiguration(config: Configuration) = Seq(
 
 // Settings specific for this project
 
-stackRegion := "eu-west-1"
+stackRegion := "us-west-1"
 
 enablePlugins(ScalaJSPlugin)
 
 name := "aws-lambda-scalajs"
 
-scalaVersion := "2.10.5"
+scalaVersion := "2.12.6"
 
 // for running under node
 scalaJSStage in Global := FastOptStage
